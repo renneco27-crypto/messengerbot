@@ -1201,7 +1201,8 @@ async def fb_verify(request: Request):
 async def fb_webhook(request: Request, x_verify_token: Optional[str] = Header(None)):
     SERVER_TOKEN = "MySecretBotToken2026"
     if x_verify_token != SERVER_TOKEN:
-        raise HTTPException(status_code=403, detail="Unauthorized: Invalid handshake token.")
+        print(f"Debug: Received token '{x_verify_token}' did not match '{SERVER_TOKEN}'")
+        raise HTTPException(status_code=403, detail="Forbidden")
     body = await request.json()
     text = body.get("text") or ""
     sender_id = body.get("sender_id", "fb_unknown")
