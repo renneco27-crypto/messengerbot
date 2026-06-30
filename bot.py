@@ -7,12 +7,9 @@ import study
 import pytz
 import telebot
 from telebot import apihelper
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-import threading
-from typing import Any
-# Make sure Event is imported for 'done'
 from threading import Event
 
 # ==========================================
@@ -1129,23 +1126,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-class _BridgeReq(BaseModel):
-    message: str
-    sender_id: str
-
-@app.get("/health")
-def health(): return {"status": "ok"}
-
-@app.get("/messenger-bridge")
-def messenger_bridge_get():
-    return {"ok": True, "endpoint": "POST /messenger-bridge", "usage": 'curl -X POST -H "Content-Type: application/json" -d \'{"message":"hello?","sender_id":"user1"}\' http://localhost:8080/messenger-bridge'}
-
-@app.post("/messenger-bridge")
-def messenger_bridge(req: _BridgeReq):
+def _bridge_process(text: str, sender_id: str) -> str:
+    """Build a synthetic Message, route through bot handlers, return the reply text."""
     import telebot.types as _t
 
-    text = req.message.strip()
-    chat_id = abs(hash(req.sender_id)) % (2**31 - 1)
+    text = text.strip()
+    chat_id = abs(hash(sender_id)) % (2**31 - 1)
 
     msg = _t.Message(
         message_id=int(time.time() * 1000) % (2**31),
@@ -1160,7 +1146,6 @@ def messenger_bridge(req: _BridgeReq):
 
     captured = {"reply": None}
     done = threading.Event()
-
     original_send = bot.send_message
 
     def patched_send(chat_id_, text_, **kw):
@@ -1177,7 +1162,48 @@ def messenger_bridge(req: _BridgeReq):
     finally:
         bot.send_message = original_send  # type: ignore[assignment]
 
-    return {"reply": captured["reply"] or "No response generated."}
+    return captured["reply"] or "No response generated."
+
+class _BridgeReq(BaseModel):
+    message: str
+    sender_id: str
+
+@app.get("/health")
+def health(): return {"status": "ok"}
+
+@app.get("/messenger-bridge")
+def messenger_bridge_get():
+    return {"ok": True, "endpoint": "POST /messenger-bridge", "usage": 'curl -X POST -H "Content-Type: application/json" -d \'{"message":"hello?","sender_id":"user1"}\' http://localhost:8080/messenger-bridge'}
+
+@app.post("/messenger-bridge")
+def messenger_bridge(req: _BridgeReq):
+    return {"reply": _bridge_process(req.message, req.sender_id)}
+
+VERIFY_TOKEN = os.environ.get("VERIFY_TOKEN", "YOUR_CUSTOM_VERIFY_TOKEN")
+
+@app.get("/webhook")
+async def fb_verify(request: Request):
+    mode = request.query_params.get("hub.mode")
+    token = request.query_params.get("hub.verify_token")
+    challenge = request.query_params.get("hub.challenge")
+    if mode == "subscribe" and token == VERIFY_TOKEN:
+        from fastapi.responses import Response as _Resp
+        return _Resp(content=challenge, media_type="text/plain")
+    from fastapi.responses import Response as _Resp
+    return _Resp(content="Forbidden", status_code=403)
+
+@app.post("/webhook")
+async def fb_webhook(request: Request):
+    body = await request.json()
+    text = body.get("text") or ""
+    sender_id = body.get("sender_id", "fb_unknown")
+    if not text:
+        try:
+            text = body["entry"][0]["messaging"][0]["message"].get("text", "")
+            sender_id = str(body["entry"][0]["messaging"][0]["sender"]["id"])
+        except (KeyError, IndexError, TypeError):
+            pass
+    return {"reply": _bridge_process(text, sender_id)}
 
 threading.Thread(target=reminder_loop, daemon=True).start()
 PORT = int(os.environ.get("PORT", 8080))
