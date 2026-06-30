@@ -7,9 +7,10 @@ import study
 import pytz
 import telebot
 from telebot import apihelper
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, HTTPException, Header
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from typing import Optional
 from threading import Event
 
 # ==========================================
@@ -1179,6 +1180,10 @@ def messenger_bridge_get():
 def messenger_bridge(req: _BridgeReq):
     return {"reply": _bridge_process(req.message, req.sender_id)}
 
+@app.get("/get-extension-token")
+async def get_extension_token():
+    return {"verify_token": "MySecretBotToken2026"}
+
 VERIFY_TOKEN = os.environ.get("VERIFY_TOKEN", "YOUR_CUSTOM_VERIFY_TOKEN")
 
 @app.get("/webhook")
@@ -1193,7 +1198,10 @@ async def fb_verify(request: Request):
     return _Resp(content="Forbidden", status_code=403)
 
 @app.post("/webhook")
-async def fb_webhook(request: Request):
+async def fb_webhook(request: Request, x_verify_token: Optional[str] = Header(None)):
+    SERVER_TOKEN = "MySecretBotToken2026"
+    if x_verify_token != SERVER_TOKEN:
+        raise HTTPException(status_code=403, detail="Unauthorized: Invalid handshake token.")
     body = await request.json()
     text = body.get("text") or ""
     sender_id = body.get("sender_id", "fb_unknown")
